@@ -1,0 +1,59 @@
+name: Build ImmortalWrt For R4S (Latest Stable)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo docker image prune -a -f
+
+      - name: Download Image Builder (Stable Release)
+        run: |
+          # 设定当前官方最新的稳定版本号
+          export STABLE_VERSION="25.12.0"
+          
+          # 自动去官方 Releases 目录抓取对应的 Image Builder 工具
+          curl -s https://downloads.immortalwrt.org/releases/$STABLE_VERSION/targets/rockchip/armv8/ -o page.html
+          FILE_NAME=$(grep -o 'immortalwrt-imagebuilder-[^"]*-rockchip-armv8\.Linux-x86_64\.tar\.[a-z]*' page.html | head -n 1)
+          wget "https://downloads.immortalwrt.org/releases/$STABLE_VERSION/targets/rockchip/armv8/$FILE_NAME"
+          
+          # 自动识别格式并解压，然后重命名文件夹
+          tar -a -xf $FILE_NAME
+          mv immortalwrt-imagebuilder-*/ ib/
+
+      - name: Configure and Build
+        run: |
+          cd ib/
+          
+          # 1. 创建自定义配置目录
+          mkdir -p files/etc/uci-defaults/
+          
+          # 2. 写入开机保护脚本 (修改网关 IP 为 192.168.100.1，设置时区，禁用 Docker 抢跑)
+          cat << 'EOF' > files/etc/uci-defaults/99-custom-settings
+          uci set network.lan.ipaddr='192.168.100.1'
+          uci commit network
+          uci set system.@system[0].timezone='CST-8'
+          uci set system.@system[0].zonename='Asia/Shanghai'
+          uci commit system
+          /etc/init.d/dockerd disable
+          EOF
+          chmod +x files/etc/uci-defaults/99-custom-settings
+
+          # 3. 开始调用官方构建器 (包含你的所有插件清单)
+          make image PROFILE="friendlyarm_nanopi-r4s" \
+            PACKAGES="luci-app-zerotier luci-proto-wireguard luci-app-wireguard luci-app-openclash luci-app-homeproxy luci-app-dae luci-app-vlmcsd luci-app-webdav luci-theme-argon luci-app-argon-config luci-app-upnp luci-app-ddns-go luci-app-mosdns luci-app-adguardhome luci-app-dockerman docker dockerd luci-app-samba4 block-mount kmod-usb-storage kmod-fs-ext4 e2fsprogs fdisk cfdisk parted resize2fs lsblk luci-app-hd-idle luci-app-ttyd luci-app-wol luci-app-irqbalance irqbalance iperf3 luci-app-nlbwmon bash curl wget-ssl htop" \
+            FILES="files"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ImmortalWrt_R4S_Stable_Firmware
+          path: ib/bin/targets/rockchip/armv8/*sysupgrade.img.gz
