@@ -151,8 +151,12 @@ jobs:
             exit 1
           fi
 
+          OPENCLASH_FILE="$(basename "$OPENCLASH_URL")"
+
           echo "OpenClash APK URL: $OPENCLASH_URL"
-          wget -O packages/luci-app-openclash.apk "$OPENCLASH_URL"
+          echo "OpenClash APK FILE: $OPENCLASH_FILE"
+
+          wget -O "packages/${OPENCLASH_FILE}" "$OPENCLASH_URL"
 
           echo "==== Third-party packages ===="
           ls -lh packages | sed -n '1,200p'
