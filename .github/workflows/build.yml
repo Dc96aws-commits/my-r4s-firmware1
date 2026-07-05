@@ -17,7 +17,10 @@ env:
   LAN_NETMASK: "255.255.255.0"
   DHCP_START: "100"
   DHCP_LIMIT: "150"
+
+  ROOTFS_PARTSIZE: "1024"
   DOCKER_DELAY_SECONDS: "180"
+  DOCKER_DATA_ROOT: "/mnt/docker"
 
 jobs:
   build:
@@ -76,6 +79,8 @@ jobs:
 
           mkdir -p files/etc/uci-defaults
           mkdir -p files/etc/init.d
+          mkdir -p files/etc/rc.d
+          mkdir -p files/mnt/docker
 
           cat > files/etc/uci-defaults/99-guy-defaults <<EOF
           #!/bin/sh
@@ -91,7 +96,17 @@ jobs:
           uci set dhcp.lan.leasetime='12h'
           uci commit dhcp
 
-          # ===== Docker 延迟启动 =====
+          # ===== Docker 数据目录：请把 TF 卡 Docker 分区挂载到这里 =====
+          mkdir -p '${DOCKER_DATA_ROOT}'
+
+          if ! uci -q get dockerd.globals >/dev/null 2>&1; then
+            uci set dockerd.globals='globals'
+          fi
+
+          uci set dockerd.globals.data_root='${DOCKER_DATA_ROOT}'
+          uci commit dockerd
+
+          # ===== 禁止 dockerd 原生开机立刻启动，改为延迟启动 =====
           if [ -x /etc/init.d/dockerd ]; then
             /etc/init.d/dockerd disable || true
           fi
@@ -113,14 +128,21 @@ jobs:
           start() {
             (
               sleep ${DOCKER_DELAY_SECONDS}
-              if [ -x /etc/init.d/dockerd ]; then
-                /etc/init.d/dockerd start
+
+              if grep -qs " ${DOCKER_DATA_ROOT} " /proc/mounts; then
+                logger -t dockerd-delay "Docker data partition ${DOCKER_DATA_ROOT} mounted, starting dockerd"
+                if [ -x /etc/init.d/dockerd ]; then
+                  /etc/init.d/dockerd start
+                fi
+              else
+                logger -t dockerd-delay "Docker data partition ${DOCKER_DATA_ROOT} is not mounted, skip starting dockerd to protect rootfs"
               fi
             ) &
           }
           EOF
 
           chmod +x files/etc/init.d/dockerd-delay
+          ln -sf ../init.d/dockerd-delay files/etc/rc.d/S99dockerd-delay
 
       - name: Download third-party packages
         run: |
@@ -167,7 +189,12 @@ jobs:
 
           cd ib
 
-          make image PROFILE="${PROFILE}" FILES="files" PACKAGES="\
+          make image \
+            PROFILE="${PROFILE}" \
+            FILES="files" \
+            ROOTFS_PARTSIZE="${ROOTFS_PARTSIZE}" \
+            DISABLED_SERVICES="dockerd" \
+            PACKAGES="\
           luci \
           luci-base \
           luci-ssl \
