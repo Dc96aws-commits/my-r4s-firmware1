@@ -1,4 +1,4 @@
-name: Build ImmortalWrt For R4S (Stable 25.12 + MosDNS APK)
+name: Build ImmortalWrt For R4S (Stable 25.12 + APK Native Inject)
 
 on:
   workflow_dispatch:
@@ -24,19 +24,24 @@ jobs:
           tar -a -xf $FILE_NAME
           mv immortalwrt-imagebuilder-*/ ib/
 
-      - name: Inject MosDNS Packages (APK Native)
+      - name: Inject Third-Party APK Repositories
         run: |
           cd ib/
-          mkdir -p packages
+          mkdir -p my_packages
           
-          # 直接下载你查到的 sbwml 大佬专为 25.12 (apk架构) 准备的压缩包
+          # 1. 下载并解压 sbwml 的 MosDNS 25.12 专属 APK 集合包
           wget https://github.com/sbwml/luci-app-mosdns/releases/download/v5.3.4-r5/aarch64_generic-openwrt-25.12.tar.gz
+          tar -zxf aarch64_generic-openwrt-25.12.tar.gz -C my_packages/
           
-          # 直接解压到 packages 目录中，里面包含了所有需要的 apk 和索引
-          tar -zxf aarch64_generic-openwrt-25.12.tar.gz -C packages/
+          # 2. 下载并解压 OpenClash 针对 25.12 APK 架构的专属包（确保 OpenClash 也不报错）
+          wget https://github.com/vernesong/OpenClash/releases/latest/download/luci-app-openclash_all.apk -P my_packages/
           
-          # 刷新包管理器索引
-          make package_index
+          # 3. 核心修正：在新版 APK 机制下，必须将自定义目录作为本地源写入配置，并绕过签名检查
+          LOCAL_PATH=$(pwd)/my_packages
+          echo "src/gz local_packages file://$LOCAL_PATH" >> repositories.cfg
+          
+          # 允许未签名或自定义证书的本地源直接提取
+          sed -i 's/option check_signature.*/option check_signature 0/g' repositories.cfg || true
 
       - name: Configure and Build
         run: |
@@ -54,7 +59,7 @@ jobs:
           EOF
           chmod +x files/etc/uci-defaults/99-custom-settings
 
-          # MosDNS 完美回归，直接打包
+          # 执行原生打包，此时系统会自动前往 repositories.cfg 里的 file:// 本地路径抓取 MosDNS 和 OpenClash
           make image PROFILE="friendlyarm_nanopi-r4s" \
             PACKAGES="luci-app-zerotier luci-proto-wireguard luci-app-openclash luci-app-homeproxy luci-app-dae luci-app-vlmcsd luci-theme-argon luci-app-argon-config luci-app-upnp luci-app-ddns-go luci-app-mosdns luci-app-adguardhome luci-app-dockerman docker dockerd luci-app-samba4 block-mount kmod-usb-storage kmod-fs-ext4 e2fsprogs fdisk cfdisk parted resize2fs lsblk luci-app-hd-idle luci-app-ttyd luci-app-wol luci-app-irqbalance irqbalance iperf3 luci-app-nlbwmon bash curl wget-ssl htop" \
             FILES="files"
@@ -62,5 +67,5 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ImmortalWrt_R4S_Firmware_25.12.0_MosDNS
+          name: ImmortalWrt_R4S_Firmware_25.12.0_FullPackages
           path: ib/bin/targets/rockchip/armv8/*sysupgrade.img.gz
