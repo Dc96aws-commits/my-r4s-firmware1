@@ -13,6 +13,11 @@ env:
   TARGET: "rockchip/armv8"
   PROFILE: "friendlyarm_nanopi-r4s"
   IMAGEBUILDER_URL: "https://downloads.immortalwrt.org/releases/25.12.0/targets/rockchip/armv8/immortalwrt-imagebuilder-25.12.0-rockchip-armv8.Linux-x86_64.tar.zst"
+  LAN_IP: "192.168.100.1"
+  LAN_NETMASK: "255.255.255.0"
+  DHCP_START: "100"
+  DHCP_LIMIT: "150"
+  DOCKER_DELAY_SECONDS: "180"
 
 jobs:
   build:
@@ -24,6 +29,8 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          set -euxo pipefail
+
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
@@ -39,8 +46,8 @@ jobs:
             libncurses5-dev \
             libssl-dev \
             python3 \
-            python3-distutils \
             python3-setuptools \
+            python3-venv \
             rsync \
             swig \
             unzip \
@@ -49,19 +56,77 @@ jobs:
             wget \
             curl \
             zstd \
-            tar
+            tar \
+            ca-certificates
 
       - name: Download ImageBuilder
         run: |
+          set -euxo pipefail
+
           wget -O imagebuilder.tar.zst "${IMAGEBUILDER_URL}"
-          tar --use-compress-program=unzstd -xf imagebuilder.tar.zst
+          tar -I zstd -xf imagebuilder.tar.zst
           mv immortalwrt-imagebuilder-* ib
           ls -la ib
 
-      - name: Download third-party packages
+      - name: Add custom firstboot defaults
         run: |
+          set -euxo pipefail
+
           cd ib
 
+          mkdir -p files/etc/uci-defaults
+          mkdir -p files/etc/init.d
+
+          cat > files/etc/uci-defaults/99-guy-defaults <<EOF
+          #!/bin/sh
+
+          # ===== LAN 网关地址 =====
+          uci set network.lan.ipaddr='${LAN_IP}'
+          uci set network.lan.netmask='${LAN_NETMASK}'
+          uci commit network
+
+          # ===== DHCP 地址池 =====
+          uci set dhcp.lan.start='${DHCP_START}'
+          uci set dhcp.lan.limit='${DHCP_LIMIT}'
+          uci set dhcp.lan.leasetime='12h'
+          uci commit dhcp
+
+          # ===== Docker 延迟启动 =====
+          if [ -x /etc/init.d/dockerd ]; then
+            /etc/init.d/dockerd disable || true
+          fi
+
+          if [ -x /etc/init.d/dockerd-delay ]; then
+            /etc/init.d/dockerd-delay enable || true
+          fi
+
+          exit 0
+          EOF
+
+          chmod +x files/etc/uci-defaults/99-guy-defaults
+
+          cat > files/etc/init.d/dockerd-delay <<EOF
+          #!/bin/sh /etc/rc.common
+
+          START=99
+
+          start() {
+            (
+              sleep ${DOCKER_DELAY_SECONDS}
+              if [ -x /etc/init.d/dockerd ]; then
+                /etc/init.d/dockerd start
+              fi
+            ) &
+          }
+          EOF
+
+          chmod +x files/etc/init.d/dockerd-delay
+
+      - name: Download third-party packages
+        run: |
+          set -euxo pipefail
+
+          cd ib
           mkdir -p packages
 
           echo "==== Download mosdns package ===="
@@ -74,7 +139,10 @@ jobs:
           find /tmp/mosdns -type f -name "*.apk" -print -exec cp -f {} packages/ \;
 
           echo "==== Download OpenClash latest APK ===="
-          OPENCLASH_URL="$(curl -fsSL https://api.github.com/repos/vernesong/OpenClash/releases/latest \
+          OPENCLASH_URL="$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "User-Agent: GitHub-Actions" \
+            https://api.github.com/repos/vernesong/OpenClash/releases/latest \
             | grep -oE 'https://[^"]+luci-app-openclash-[^"]+\.apk' \
             | head -n1)"
 
@@ -87,13 +155,15 @@ jobs:
           wget -O packages/luci-app-openclash.apk "$OPENCLASH_URL"
 
           echo "==== Third-party packages ===="
-          ls -lh packages | sed -n '1,120p'
+          ls -lh packages | sed -n '1,200p'
 
       - name: Build firmware
         run: |
+          set -euxo pipefail
+
           cd ib
 
-          make image PROFILE="${PROFILE}" PACKAGES="\
+          make image PROFILE="${PROFILE}" FILES="files" PACKAGES="\
           luci \
           luci-base \
           luci-ssl \
@@ -139,15 +209,27 @@ jobs:
           luci-app-openclash \
           luci-app-mosdns \
           mosdns \
+          luci-app-homeproxy \
+          luci-app-dufs \
+          dufs \
+          speedtest-go \
+          speedtestcpp \
+          speedtest-netperf \
           "
 
       - name: List output
         run: |
+          set -euxo pipefail
+
           echo "==== Firmware output ===="
           find ib/bin/targets -type f | sort
+
           mkdir -p output
           cp -av ib/bin/targets/*/*/*.img.gz output/ || true
           cp -av ib/bin/targets/*/*/*.manifest output/ || true
+          cp -av ib/bin/targets/*/*/*.buildinfo output/ || true
+          cp -av ib/bin/targets/*/*/*.json output/ || true
+
           ls -lh output
 
       - name: Upload artifact
