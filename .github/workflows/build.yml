@@ -29,10 +29,18 @@ jobs:
           cd ib/
           mkdir -p packages
           
-          # 从 sbwml 的稳定源下载 aarch64_generic 架构的 mosdns 核心、界面和 geo 数据库
-          wget -q -P packages https://github.com/sbwml/luci-app-mosdns/releases/latest/download/mosdns_aarch64_generic.ipk
-          wget -q -P packages https://github.com/sbwml/luci-app-mosdns/releases/latest/download/luci-app-mosdns_all.ipk
-          wget -q -P packages https://github.com/sbwml/v2ray-geodata/releases/latest/download/v2ray-geodata_all.ipk
+          # 动态获取 sbwml 的 MosDNS 最新版本发布数据
+          echo "开始动态抓取 MosDNS 最新依赖包..."
+          API_URL="https://api.github.com/repos/sbwml/luci-app-mosdns/releases/latest"
+          
+          # 提取真实的下载链接并进行下载
+          curl -s $API_URL | grep "browser_download_url" | grep "mosdns_.*aarch64_generic\.ipk" | cut -d '"' -f 4 | wget -i - -P packages/
+          curl -s $API_URL | grep "browser_download_url" | grep "luci-app-mosdns_.*all\.ipk" | cut -d '"' -f 4 | wget -i - -P packages/
+          curl -s $API_URL | grep "browser_download_url" | grep "v2ray-geodata_.*all\.ipk" | cut -d '"' -f 4 | wget -i - -P packages/
+          
+          # 打印下载的文件列表，确认是否下载成功
+          echo "下载完成，检查文件："
+          ls -lh packages/
           
           # 重建本地安装包索引，让 Image Builder 能够识别它们
           make package_index
