@@ -1,4 +1,4 @@
-name: Build ImmortalWrt For R4S (Latest Stable + MosDNS)
+name: Build ImmortalWrt For R4S (Stable 25.12 + MosDNS APK)
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo docker image prune -a -f
 
-      - name: Download Image Builder (Stable Release)
+      - name: Download Image Builder
         run: |
           export STABLE_VERSION="25.12.0"
           curl -s https://downloads.immortalwrt.org/releases/$STABLE_VERSION/targets/rockchip/armv8/ -o page.html
@@ -24,25 +24,18 @@ jobs:
           tar -a -xf $FILE_NAME
           mv immortalwrt-imagebuilder-*/ ib/
 
-      - name: Inject MosDNS Packages
+      - name: Inject MosDNS Packages (APK Native)
         run: |
           cd ib/
           mkdir -p packages
           
-          # 动态获取 sbwml 的 MosDNS 最新版本发布数据
-          echo "开始动态抓取 MosDNS 最新依赖包..."
-          API_URL="https://api.github.com/repos/sbwml/luci-app-mosdns/releases/latest"
+          # 直接下载你查到的 sbwml 大佬专为 25.12 (apk架构) 准备的压缩包
+          wget https://github.com/sbwml/luci-app-mosdns/releases/download/v5.3.4-r5/aarch64_generic-openwrt-25.12.tar.gz
           
-          # 提取真实的下载链接并进行下载
-          curl -s $API_URL | grep "browser_download_url" | grep "mosdns_.*aarch64_generic\.ipk" | cut -d '"' -f 4 | wget -i - -P packages/
-          curl -s $API_URL | grep "browser_download_url" | grep "luci-app-mosdns_.*all\.ipk" | cut -d '"' -f 4 | wget -i - -P packages/
-          curl -s $API_URL | grep "browser_download_url" | grep "v2ray-geodata_.*all\.ipk" | cut -d '"' -f 4 | wget -i - -P packages/
+          # 直接解压到 packages 目录中，里面包含了所有需要的 apk 和索引
+          tar -zxf aarch64_generic-openwrt-25.12.tar.gz -C packages/
           
-          # 打印下载的文件列表，确认是否下载成功
-          echo "下载完成，检查文件："
-          ls -lh packages/
-          
-          # 重建本地安装包索引，让 Image Builder 能够识别它们
+          # 刷新包管理器索引
           make package_index
 
       - name: Configure and Build
@@ -61,7 +54,7 @@ jobs:
           EOF
           chmod +x files/etc/uci-defaults/99-custom-settings
 
-          # 重新将 luci-app-mosdns 加回构建清单中
+          # MosDNS 完美回归，直接打包
           make image PROFILE="friendlyarm_nanopi-r4s" \
             PACKAGES="luci-app-zerotier luci-proto-wireguard luci-app-openclash luci-app-homeproxy luci-app-dae luci-app-vlmcsd luci-theme-argon luci-app-argon-config luci-app-upnp luci-app-ddns-go luci-app-mosdns luci-app-adguardhome luci-app-dockerman docker dockerd luci-app-samba4 block-mount kmod-usb-storage kmod-fs-ext4 e2fsprogs fdisk cfdisk parted resize2fs lsblk luci-app-hd-idle luci-app-ttyd luci-app-wol luci-app-irqbalance irqbalance iperf3 luci-app-nlbwmon bash curl wget-ssl htop" \
             FILES="files"
@@ -69,5 +62,5 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ImmortalWrt_R4S_MosDNS_Firmware
+          name: ImmortalWrt_R4S_Firmware_25.12.0_MosDNS
           path: ib/bin/targets/rockchip/armv8/*sysupgrade.img.gz
